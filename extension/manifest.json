@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "SmartPrice Matcher",
+  "version": "1.2",
+  "description": "Finds the exact product you're looking at on other e-commerce stores.",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "host_permissions": [
+    "*://*.amazon.in/*",
+    "*://*.flipkart.com/*",
+    "http://127.0.0.1:5000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.amazon.in/*", 
+        "*://*.amazon.com/*", 
+        "*://*.flipkart.com/*",
+        "*://*.croma.com/*",
+        "*://*.reliancedigital.in/*"
+      ],
+      "css": ["styles.css"],
+      "js": ["content.js"]
+    }
+  ]
+}

@@ -87,27 +87,48 @@ def extract_details(raw_query):
     
     return details
 
-def is_strict_match(title_text, details):
-    if not title_text: return False
-    text = title_text.lower().replace(" ", "")
-    
-    if details['brand'] and details['brand'].lower().replace(" ", "") not in text:
+def is_model_match(title_text, details):
+    title = title_text.lower()
+    if details['brand'] and details['brand'].lower() not in title:
         return False
         
     if details['model']:
-        for word in details['model'].lower().split():
-            if word not in text:
+        model_lower = details['model'].lower()
+        fluff_words = ['smartphone', 'mobile', 'phone', 'ai', 'dual', 'sim', 'unlocked', 'android', 'apple', 'ios', 'camera']
+        model_words = [w for w in model_lower.split() if w not in fluff_words]
+        for mw in model_words:
+            if mw not in title:
                 return False
                 
-    if details['ram'] and details['ram'].lower() not in text:
-        return False
-        
-    if details['storage'] and details['storage'].lower() not in text:
-        return False
-        
+        modifiers = ['pro', 'plus', 'max', 'ultra', 'lite', 'fe', 'se', 'fold', 'flip', 'edge', 'neo', 'mini']
+        for mod in modifiers:
+            if not re.search(r'\b' + mod + r'\b', model_lower):
+                if re.search(r'\b' + mod + r'\b', title):
+                    return False
     return True
 
+def is_strict_match(title_text, details):
+    if not is_model_match(title_text, details):
+        return False
+        
+    title = title_text.lower()
+    if details['ram'] and details['ram'].lower() not in title.replace(' ', ''):
+        ram_spaced = details['ram'].lower().replace('gb', ' gb').replace('tb', ' tb')
+        if ram_spaced not in title:
+            return False
+            
+    if details['storage'] and details['storage'].lower() not in title.replace(' ', ''):
+        storage_spaced = details['storage'].lower().replace('gb', ' gb').replace('tb', ' tb')
+        if storage_spaced not in title:
+            return False
+            
+    return True
+
+def is_variant_match(title_text, details):
+    return is_model_match(title_text, details)
+
 def search_amazon(driver, query, details):
+    res = {"exact": None, "variant": None}
     try:
         url = f"https://www.amazon.in/s?k={urllib.parse.quote(query)}"
         driver.get(url)
@@ -116,16 +137,19 @@ def search_amazon(driver, query, details):
         )
         for result in driver.find_elements(By.CSS_SELECTOR, 'div[data-component-type="s-search-result"]')[:5]:
             try:
-                # The result.text contains the brand (which Amazon often puts in a separate h2) and the full title
+                elem = result.find_element(By.CSS_SELECTOR, 'a.a-link-normal[href*="/dp/"]')
+                link = elem.get_attribute('href').split('?')[0]
                 if is_strict_match(result.text, details):
-                    # Once we verify it's a strict match, find the actual product link within this result container
-                    elem = result.find_element(By.CSS_SELECTOR, 'a.a-link-normal[href*="/dp/"]')
-                    return elem.get_attribute('href').split('?')[0]
+                    res["exact"] = link
+                    return res
+                elif is_variant_match(result.text, details) and not res["variant"]:
+                    res["variant"] = link
             except: continue
     except: pass
-    return "Not Found"
+    return res
 
 def search_flipkart(driver, query, details):
+    res = {"exact": None, "variant": None}
     try:
         url = f"https://www.flipkart.com/search?q={urllib.parse.quote(query)}"
         driver.get(url)
@@ -134,13 +158,18 @@ def search_flipkart(driver, query, details):
         )
         for result in driver.find_elements(By.CSS_SELECTOR, 'a[target="_blank"]')[:10]:
             try:
+                link = result.get_attribute('href').split('?')[0]
                 if is_strict_match(result.text, details):
-                    return result.get_attribute('href').split('?')[0]
+                    res["exact"] = link
+                    return res
+                elif is_variant_match(result.text, details) and not res["variant"]:
+                    res["variant"] = link
             except: continue
     except: pass
-    return "Not Found"
+    return res
 
 def search_croma(driver, query, details):
+    res = {"exact": None, "variant": None}
     try:
         url = f"https://www.croma.com/searchB?q={urllib.parse.quote(query)}%3Arelevance"
         driver.get(url)
@@ -149,15 +178,20 @@ def search_croma(driver, query, details):
         )
         for result in driver.find_elements(By.CSS_SELECTOR, '.product-title a, h3.product-title a')[:5]:
             try:
+                link = result.get_attribute('href').split('?')[0]
                 if is_strict_match(result.text, details):
-                    return result.get_attribute('href').split('?')[0]
+                    res["exact"] = link
+                    return res
+                elif is_variant_match(result.text, details) and not res["variant"]:
+                    res["variant"] = link
             except: continue
     except: pass
-    return "Not Found"
+    return res
 
 def search_reliance(driver, query, details):
+    res = {"exact": None, "variant": None}
     try:
-        # Build strict query for Reliance Digital since it ignores broad queries easily
+        # Build strict query for Reliance Digital
         rd_query = f"{details['brand']} {details['model']} {details['storage']}"
         url = f"https://www.reliancedigital.in/products?q={urllib.parse.quote(rd_query)}"
         driver.get(url)
@@ -166,11 +200,15 @@ def search_reliance(driver, query, details):
         )
         for result in driver.find_elements(By.CSS_SELECTOR, 'a[href*="/product/"]')[:5]:
             try:
+                link = result.get_attribute('href').split('?')[0]
                 if is_strict_match(result.text, details):
-                    return result.get_attribute('href').split('?')[0]
+                    res["exact"] = link
+                    return res
+                elif is_variant_match(result.text, details) and not res["variant"]:
+                    res["variant"] = link
             except: continue
     except: pass
-    return "Not Found"
+    return res
 
 def main():
     if len(sys.argv) < 2:
