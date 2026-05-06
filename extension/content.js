@@ -48,21 +48,33 @@ function extractAttributes(title) {
   }
 
   // 3. Extract Color
-  // A. Check inside parentheses first (e.g. "(Cobalt Violet, 256 GB)")
+  const colorSegments = [];
+  
+  // A. Check inside parentheses first
   const parenMatch = title.match(/\((.*?)\)/);
-  if (parenMatch) {
-    const parts = parenMatch[1].split(',');
-    for (const part of parts) {
-      if (!/\d+/.test(part) && part.trim().length > 2) {
-         details.color = part.trim();
-         break;
-      }
+  if (parenMatch) colorSegments.push(...parenMatch[1].split(','));
+  
+  // B. Check comma-separated chunks of the whole title
+  colorSegments.push(...title.split(','));
+
+  const extendedColors = [...baseColors, 'navy', 'carbon', 'starlight', 'midnight', 'copper', 'olive', 'sapphire', 'teal', 'indigo', 'burgundy', 'bronze', 'peach', 'sand', 'slate', 'aqua', 'pearl', 'maroon', 'ivory', 'rose', 'lilac', 'cobalt', 'violet', 'voilet', 'lavender', 'titanium', 'graphite', 'phantom', 'cream', 'mint', 'emerald', 'obsidian', 'porcelain', 'hazel', 'bay', 'coral', 'sea', 'charcoal', 'limestone', 'winter', 'mist', 'frost', 'berry'];
+
+  for (const part of colorSegments) {
+    const p = part.trim();
+    // A color segment usually has no numbers, is longer than 2 chars, and isn't a generic word
+    if (!/\d+/.test(p) && p.length > 2) {
+       const pLower = p.toLowerCase();
+       if (pLower === 'mobile phone' || pLower === 'smartphone' || pLower === 'dual sim') continue;
+       
+       // If this segment contains any known color word, assume the WHOLE segment is the color name!
+       if (extendedColors.some(c => pLower.includes(c))) {
+           details.color = p;
+           break;
+       }
     }
   }
-  
-  const extendedColors = [...baseColors, 'cobalt', 'violet', 'voilet', 'lavender', 'titanium', 'graphite', 'phantom', 'cream', 'mint', 'emerald', 'obsidian', 'porcelain', 'hazel', 'bay', 'coral', 'sea', 'charcoal', 'limestone', 'winter', 'mist', 'frost', 'berry'];
 
-  // B. Fallback to scanning words if no color found in parentheses
+  // C. Fallback to scanning individual words
   if (!details.color) {
     const words = title.split(/\s+/);
     for (let i = 0; i < words.length; i++) {
@@ -70,7 +82,9 @@ function extractAttributes(title) {
         if (extendedColors.includes(w)) {
             if (i > 0) {
                const prev = words[i-1].toLowerCase().replace(/[^a-z]/g, '');
-               if (['cobalt', 'phantom', 'titanium', 'winter'].includes(prev)) {
+               const ignorePrev = ['gb', 'tb', 'mb', 'ram', 'rom', 'storage', 'smartphone', 'mobile', 'phone', '5g', '4g', 'with', 'and'];
+               // If the previous word isn't a spec/fluff, it's likely a color modifier (e.g. "Awesome Iceblue")
+               if (!ignorePrev.includes(prev) && !/\d+/.test(words[i-1])) {
                   details.color = words[i-1] + ' ' + words[i];
                   break;
                }
@@ -84,10 +98,14 @@ function extractAttributes(title) {
   // 4. Extract Model (The "Clean Sweep")
   let modelPart = title;
   
-  // A. Remove Brand
-  if (details.brand) modelPart = modelPart.replace(new RegExp(details.brand, 'gi'), '');
+  // IMMEDIATELY discard all promotional text after pipes, hyphens, parentheses, or keywords 'with'/'by'
+  // Example: "Galaxy S25 5G with Galaxy AI" -> "Galaxy S25 5G"
+  modelPart = modelPart.split(/\|| - | \(|\bwith\b|\bby\b/i)[0].trim();
   
-  // B. Remove anything inside parentheses
+  // A. Remove Brand
+  if (details.brand) modelPart = modelPart.replace(new RegExp('\\b' + details.brand + '\\b', 'gi'), '');
+  
+  // B. Remove anything inside remaining parentheses (just in case)
   modelPart = modelPart.replace(/\(.*?\)/g, ' ');
 
   // C. Remove ALL specs
@@ -96,7 +114,13 @@ function extractAttributes(title) {
   // Extra strict clean for spec words left behind
   modelPart = modelPart.replace(/\b(?:ram|rom|storage|memory)\b/gi, '');
   
-  // D. Remove ALL color words (Extended list)
+  // D. Remove the specific Extracted Color string
+  if (details.color) {
+     const safeColor = details.color.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+     modelPart = modelPart.replace(new RegExp(safeColor, 'gi'), '');
+  }
+
+  // E. Remove ALL raw color words (Fallback)
   extendedColors.forEach(c => {
     modelPart = modelPart.replace(new RegExp('\\b' + c + '\\b', 'gi'), '');
   });
@@ -185,8 +209,11 @@ function injectFAB() {
       <button class="sp-close" id="sp-close-btn">&times;</button>
     </div>
     <div class="sp-body">
-      <div class="sp-detected-title" id="sp-detected-title">Detecting product...</div>
-      <div class="sp-detected-specs" id="sp-detected-specs"></div>
+      <div class="sp-detected-title" id="sp-detected-title" style="margin-bottom: 12px; line-height: 1.5;">
+        <div style="font-size: 12px; color: #a1a1aa;">Brand: <span id="sp-ui-brand" style="color: white; font-weight: bold;">Detecting...</span></div>
+        <div style="font-size: 12px; color: #a1a1aa;">Model: <span id="sp-ui-model" style="color: white; font-weight: bold;">Detecting...</span></div>
+        <div style="font-size: 12px; color: #a1a1aa;">Specs: <span id="sp-ui-specs" style="color: white; font-weight: bold;">Detecting...</span></div>
+      </div>
       <button class="sp-action-btn" id="sp-start-scan">Scan Other Stores</button>
       
       <div class="sp-loading" id="sp-loading">
@@ -204,15 +231,27 @@ function injectFAB() {
 
   btn.addEventListener("click", () => {
     widget.classList.add("sp-open");
-    // Prioritize H1 or specific store title elements
-    const h1 = document.querySelector('h1, .B_NuCI, .pd-title, .pdp__title, #productTitle');
-    const rawTitle = h1 ? h1.innerText : document.title;
+    // Prioritize specific store title elements to avoid grabbing promotional h1 tags
+    const specificElem = document.getElementById("productTitle") || // Amazon
+                         document.querySelector(".B_NuCI, .VU-ZEz") || // Flipkart
+                         document.querySelector(".pd-title, .pdp__title"); // Croma & Reliance
+                         
+    let rawTitle = "";
+    if (specificElem) {
+      rawTitle = specificElem.innerText;
+    } else {
+      const h1 = document.querySelector("h1");
+      rawTitle = h1 ? h1.innerText : document.title;
+    }
+    
     targetDetails = extractAttributes(rawTitle);
     
     console.log("[SmartPrice] Detected Target:", targetDetails);
     
-    document.getElementById("sp-detected-title").innerText = `${targetDetails.brand || ''} ${targetDetails.model || 'Unknown Product'}`;
-    document.getElementById("sp-detected-specs").innerText = `${targetDetails.ram ? targetDetails.ram + ' RAM | ' : ''}${targetDetails.storage || ''} ${targetDetails.color || ''}`;
+    document.getElementById("sp-ui-brand").innerText = targetDetails.brand || 'N/A';
+    document.getElementById("sp-ui-model").innerText = targetDetails.model || 'Unknown';
+    document.getElementById("sp-ui-specs").innerText = `${targetDetails.ram ? targetDetails.ram + ' RAM | ' : ''}${targetDetails.storage || ''} ${targetDetails.color ? '| ' + targetDetails.color : ''}`;
+    
     document.getElementById("sp-start-scan").disabled = !targetDetails.brand && !targetDetails.model;
   });
 
@@ -228,7 +267,7 @@ function injectFAB() {
     document.getElementById("sp-error").style.display = "none";
     document.getElementById("sp-results").style.display = "none";
 
-    const query = `${targetDetails.brand} ${targetDetails.model} ${targetDetails.storage}`.trim();
+    const query = `${targetDetails.brand} ${targetDetails.model} ${targetDetails.storage} ${targetDetails.color || ''}`.replace(/\s+/g, ' ').trim();
     chrome.runtime.sendMessage({ action: "searchProduct", query: query, target: targetDetails });
   });
 }
@@ -340,14 +379,30 @@ async function runAutoScraper() {
        if (host.includes("reliancedigital.in") && (href.includes("/product/") || href.includes("/p/") || href.includes("/buy/"))) isValidProductLink = true;
 
        if (isValidProductLink) {
-          let text = link.innerText.trim();
+          let rawText = link.innerText.trim();
           
-          if (text.length < 15) {
-             text = link.getAttribute('title') || link.getAttribute('aria-label') || link.parentElement.innerText.trim();
+          if (rawText.length < 15) {
+             rawText = link.getAttribute('title') || link.getAttribute('aria-label') || link.parentElement.innerText.trim();
           }
           
-          if (text && text.length >= 15) {
-             candidates.push({ title: text.replace(/\n/g, ' '), link: href.split('?')[0] });
+          if (rawText && rawText.length >= 15) {
+             let finalTitle = rawText;
+             // If this is a complex grid card with multiple lines (like Flipkart), isolate the actual title!
+             if (rawText.includes('\n')) {
+                 const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 3);
+                 let titleIdx = lines.findIndex(l => target.brand && l.toLowerCase().includes(target.brand.toLowerCase()));
+                 if (titleIdx === -1) titleIdx = lines.indexOf(lines.reduce((a, b) => a.length > b.length ? a : b, ""));
+                 
+                 let reconstructed = lines[titleIdx] || "";
+                 // Append any other lines that contain RAM/Storage specs so they aren't lost to the strict matcher!
+                 for (let i = 0; i < lines.length; i++) {
+                     if (i !== titleIdx && /(?:GB|TB|MB|RAM|ROM)/i.test(lines[i])) {
+                         reconstructed += " " + lines[i];
+                     }
+                 }
+                 finalTitle = reconstructed;
+             }
+             candidates.push({ title: finalTitle.replace(/\s+/g, ' ').trim(), link: href.split('?')[0] });
           }
        }
     });
