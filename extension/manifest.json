@@ -12,7 +12,8 @@
     "*://*.amazon.in/*",
     "*://*.flipkart.com/*",
     "*://*.croma.com/*",
-    "*://*.reliancedigital.in/*"
+    "*://*.reliancedigital.in/*",
+    "https://teamdev.flipshope.com/*"
   ],
   "background": {
     "service_worker": "background.js"

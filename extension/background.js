@@ -66,6 +66,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       handleTabResult(foundMainTabId, storeId, request.data);
     }
   }
+
+  if (request.action === "pushToDB") {
+    fetch("https://teamdev.flipshope.com/api/priceComparison/addpricecomparisondataext", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request.payload)
+    })
+    .then(res => {
+        if (!res.ok) throw new Error("API returned status " + res.status);
+        sendResponse({ success: true });
+    })
+    .catch(err => {
+        console.error("[Background] Push Error:", err);
+        sendResponse({ success: false, error: err.message });
+    });
+    return true; // Return true to indicate we wish to send a response asynchronously
+  }
 });
 
 function handleTabResult(mainTabId, storeId, data) {

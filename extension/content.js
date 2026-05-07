@@ -192,6 +192,21 @@ function isStrictMatch(candidateTitle, target) {
   return true;
 }
 
+// --- GLOBAL STATE ---
+let globalTargetDetails = null;
+let globalCurrentResults = null;
+
+function extractPidFromUrl(urlStr, sid) {
+   try {
+     const u = new URL(urlStr);
+     if (sid === 1) return u.searchParams.get("pid");
+     if (sid === 2) { const m = u.pathname.match(/\/dp\/([A-Z0-9]+)/); return m ? m[1] : null; }
+     if (sid === 13) { const m = u.pathname.match(/\/p\/([a-zA-Z0-9]+)/); return m ? m[1] : null; }
+     if (sid === 14) { const p = u.pathname.split('/'); return p[p.length - 1]; }
+   } catch(e) {}
+   return null;
+}
+
 // --- UI AND INJECTION LOGIC ---
 function injectFAB() {
   if (document.getElementById("sp-floating-btn")) return;
@@ -214,7 +229,10 @@ function injectFAB() {
         <div style="font-size: 12px; color: #a1a1aa;">Model: <span id="sp-ui-model" style="color: white; font-weight: bold;">Detecting...</span></div>
         <div style="font-size: 12px; color: #a1a1aa;">Specs: <span id="sp-ui-specs" style="color: white; font-weight: bold;">Detecting...</span></div>
       </div>
-      <button class="sp-action-btn" id="sp-start-scan">Scan Other Stores</button>
+      <div style="display: flex; gap: 8px;">
+        <button class="sp-action-btn" id="sp-start-scan" style="flex: 1;">Scan Other Stores</button>
+        <button class="sp-action-btn" id="sp-push-db" style="flex: 1; display: none; background: #10b981;">Push to DB</button>
+      </div>
       
       <div class="sp-loading" id="sp-loading">
         <div class="sp-spinner"></div>
@@ -227,7 +245,7 @@ function injectFAB() {
   `;
   document.body.appendChild(widget);
 
-  let targetDetails = null;
+  document.body.appendChild(widget);
 
   btn.addEventListener("click", () => {
     widget.classList.add("sp-open");
@@ -244,15 +262,75 @@ function injectFAB() {
       rawTitle = h1 ? h1.innerText : document.title;
     }
     
-    targetDetails = extractAttributes(rawTitle);
+    globalTargetDetails = extractAttributes(rawTitle);
     
-    console.log("[SmartPrice] Detected Target:", targetDetails);
+    console.log("[SmartPrice] Detected Target:", globalTargetDetails);
     
-    document.getElementById("sp-ui-brand").innerText = targetDetails.brand || 'N/A';
-    document.getElementById("sp-ui-model").innerText = targetDetails.model || 'Unknown';
-    document.getElementById("sp-ui-specs").innerText = `${targetDetails.ram ? targetDetails.ram + ' RAM | ' : ''}${targetDetails.storage || ''} ${targetDetails.color ? '| ' + targetDetails.color : ''}`;
+    document.getElementById("sp-ui-brand").innerText = globalTargetDetails.brand || 'N/A';
+    document.getElementById("sp-ui-model").innerText = globalTargetDetails.model || 'Unknown';
+    document.getElementById("sp-ui-specs").innerText = `${globalTargetDetails.ram ? globalTargetDetails.ram + ' RAM | ' : ''}${globalTargetDetails.storage || ''} ${globalTargetDetails.color ? '| ' + globalTargetDetails.color : ''}`;
     
-    document.getElementById("sp-start-scan").disabled = !targetDetails.brand && !targetDetails.model;
+    document.getElementById("sp-start-scan").disabled = !globalTargetDetails.brand && !globalTargetDetails.model;
+  });
+
+  document.getElementById("sp-push-db").addEventListener("click", async () => {
+    if (!globalTargetDetails || !globalCurrentResults) return;
+    
+    const btnDb = document.getElementById("sp-push-db");
+    btnDb.innerText = "Pushing...";
+    btnDb.disabled = true;
+
+    const data = [];
+    
+    const host = window.location.hostname;
+    let currentSid = 0;
+    if (host.includes("flipkart.com")) currentSid = 1;
+    else if (host.includes("amazon.in")) currentSid = 2;
+    else if (host.includes("croma.com")) currentSid = 13;
+    else if (host.includes("reliancedigital.in")) currentSid = 14;
+    
+    if (currentSid > 0) {
+        const pid = extractPidFromUrl(window.location.href, currentSid);
+        if (pid) data.push({ pid, sid: currentSid });
+    }
+
+    for (const [storeId, links] of Object.entries(globalCurrentResults)) {
+        let sid = 0;
+        if (storeId === 'flipkart') sid = 1;
+        else if (storeId === 'amazon') sid = 2;
+        else if (storeId === 'croma') sid = 13;
+        else if (storeId === 'reliance_digital') sid = 14;
+        
+        let pid = null;
+        if (links.exact) pid = extractPidFromUrl(links.exact, sid);
+        else if (links.variant) pid = extractPidFromUrl(links.variant, sid);
+        
+        if (pid && !data.find(x => x.pid === pid)) data.push({ pid, sid });
+    }
+
+    const payload = {
+        model: globalTargetDetails.model,
+        brand: globalTargetDetails.brand,
+        priceComparisonData: data
+    };
+
+    console.log("[SmartPrice] Pushing to DB:", payload);
+
+    try {
+        chrome.runtime.sendMessage({ action: "pushToDB", payload: payload }, (response) => {
+            if (response && response.success) {
+                btnDb.innerText = "Pushed to DB!";
+                btnDb.style.background = "#059669";
+            } else {
+                btnDb.innerText = "API Error";
+                btnDb.style.background = "#ef4444";
+                console.error("[SmartPrice] API Error:", response?.error);
+            }
+        });
+    } catch (e) {
+        btnDb.innerText = "Network Error";
+        btnDb.style.background = "#ef4444";
+    }
   });
 
   document.getElementById("sp-close-btn").addEventListener("click", () => {
@@ -260,15 +338,16 @@ function injectFAB() {
   });
 
   document.getElementById("sp-start-scan").addEventListener("click", () => {
-    if (!targetDetails) return;
+    if (!globalTargetDetails) return;
     
     document.getElementById("sp-start-scan").style.display = "none";
+    document.getElementById("sp-push-db").style.display = "none";
     document.getElementById("sp-loading").style.display = "block";
     document.getElementById("sp-error").style.display = "none";
     document.getElementById("sp-results").style.display = "none";
 
-    const query = `${targetDetails.brand} ${targetDetails.model} ${targetDetails.storage} ${targetDetails.color || ''}`.replace(/\s+/g, ' ').trim();
-    chrome.runtime.sendMessage({ action: "searchProduct", query: query, target: targetDetails });
+    const query = `${globalTargetDetails.brand} ${globalTargetDetails.model} ${globalTargetDetails.storage} ${globalTargetDetails.color || ''}`.replace(/\s+/g, ' ').trim();
+    chrome.runtime.sendMessage({ action: "searchProduct", query: query, target: globalTargetDetails });
   });
 }
 
@@ -277,11 +356,16 @@ function renderResults(results) {
   let exactHtml = "";
   let variantHtml = "";
 
+  const storeIdToSid = { 'flipkart': 1, 'amazon': 2, 'croma': 13, 'reliance_digital': 14 };
+
   for (const [storeId, links] of Object.entries(results)) {
     const iconUrl = STORE_ICONS[storeId];
     const storeName = STORE_NAMES[storeId];
+    const sid = storeIdToSid[storeId] || 0;
     
     if (links.exact) {
+      const pid = extractPidFromUrl(links.exact, sid);
+      const pidHtml = pid ? `<span style="font-size: 9px; color: #10b981; display: block; margin-top: 2px;">SID: ${sid} | PID: ${pid}</span>` : '';
       exactHtml += `
         <div style="position: relative; display: flex; align-items: center;" class="sp-store-card-wrapper">
           <a href="${links.exact}" target="_blank" class="sp-store-card" style="flex: 1; padding-right: 32px;">
@@ -290,6 +374,7 @@ function renderResults(results) {
               <div class="sp-store-details" style="display:flex; flex-direction:column; justify-content:center;">
                 <span class="sp-store-name" style="font-weight:bold;">${storeName}</span>
                 <span class="sp-store-title" style="font-size: 10px; color: #a1a1aa; display: block; margin-top: 2px; line-height: 1.2; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${links.exactTitle}">${links.exactTitle}</span>
+                ${pidHtml}
               </div>
             </div>
             <span class="sp-view-btn">View Match</span>
@@ -298,6 +383,8 @@ function renderResults(results) {
         </div>
       `;
     } else if (links.variant) {
+      const pid = extractPidFromUrl(links.variant, sid);
+      const pidHtml = pid ? `<span style="font-size: 9px; color: #a1a1aa; display: block; margin-top: 2px;">SID: ${sid} | PID: ${pid}</span>` : '';
       variantHtml += `
         <div style="position: relative; display: flex; align-items: center;" class="sp-store-card-wrapper">
           <a href="${links.variant}" target="_blank" class="sp-store-card sp-variant" style="flex: 1; padding-right: 32px;">
@@ -306,6 +393,7 @@ function renderResults(results) {
               <div class="sp-store-details" style="display:flex; flex-direction:column; justify-content:center;">
                 <span class="sp-store-name" style="font-weight:bold;">${storeName}</span>
                 <span class="sp-store-title" style="font-size: 10px; color: #a1a1aa; display: block; margin-top: 2px; line-height: 1.2; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${links.variantTitle}">${links.variantTitle}</span>
+                ${pidHtml}
               </div>
             </div>
             <span class="sp-view-btn">View Variant</span>
@@ -333,9 +421,17 @@ function renderResults(results) {
   document.getElementById("sp-loading").style.display = "none";
   resultsDiv.style.display = "flex";
   
+  globalCurrentResults = results;
+  
   const startBtn = document.getElementById("sp-start-scan");
   startBtn.style.display = "block";
   startBtn.innerText = "Search Again";
+  
+  const pushBtn = document.getElementById("sp-push-db");
+  pushBtn.style.display = "block";
+  pushBtn.innerText = "Push to DB";
+  pushBtn.disabled = false;
+  pushBtn.style.background = "#10b981";
 }
 
 // --- AUTOMATED SCRAPER LOGIC ---
@@ -402,7 +498,15 @@ async function runAutoScraper() {
                  }
                  finalTitle = reconstructed;
              }
-             candidates.push({ title: finalTitle.replace(/\s+/g, ' ').trim(), link: href.split('?')[0] });
+             let finalLink = href.split('?')[0];
+             if (host.includes("flipkart.com")) {
+                 try {
+                     const u = new URL(href);
+                     const pid = u.searchParams.get("pid");
+                     if (pid) finalLink += `?pid=${pid}`;
+                 } catch(e) {}
+             }
+             candidates.push({ title: finalTitle.replace(/\s+/g, ' ').trim(), link: finalLink });
           }
        }
     });
